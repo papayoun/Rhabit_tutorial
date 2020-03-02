@@ -6,3 +6,6 @@
 *.synctex.gz
 *.aux
 *.bbl
+.Rproj.user/
+.Rproj.user
+.Rhistory

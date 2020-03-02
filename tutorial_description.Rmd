@@ -1,0 +1,87 @@
+---
+title: 'Linking movement to spatial covariates through the Langevin diffusion.'
+subtitle: 'Tutorial for the Moving2Gather workshop, March 2020'
+author: "Pierre Gloaguen"
+date: "March 13th, 2020"
+output: 
+  html_document:
+    toc: yes
+    toc_float: yes
+    theme: journal
+    number_sections: yes
+bibliography: bibliography.bib
+---
+
+# About this tutorial {-}
+
+This tutorial explains how to fit the Langevin diffusion movement model published in @michelot2019langevin using the current version of the `R` package [@rcore2019language] `Rhabit`.
+
+As this package might evolve, some of the following codes may not work in the future. Feel free to contact me at pierre.gloaguen@agroparistech.fr to get up to dates versions.
+
+# Getting the required packages {-}
+
+This tutorial mostly rely on the `Rhabit` package, that is currently available on [Github](https://github.com). 
+
+## Installation of `Rhabit` {-}
+
+`Rhabit` can be installed directly from there, typing in the `R` console (`devtools` is an `R` package that you might need to install):
+
+```{r install_rhabit, eval = FALSE}
+devtools::install_github("papayoun/Rhabit") # Installing (run only once)
+```
+
+The installation might require installation (or updating) of other packages.
+
+## Loading required packages {-}
+
+In the following (in addition to the specific `Rhabit` functions), all data cleaning, preparation and visualization will be done using a bunch of packages gathered in the metapackage `tidyverse`.
+This regroups a set of convenient packages  for data analysis (see the [R for data science](https://r4ds.had.co.nz/) book).
+
+```{r load_packages, message = FALSE, cache = FALSE}
+library(Rhabit) # Package dedicated to the Langevin movement model
+library(tidyverse) # Set of useful packages, including ggplot2
+```
+
+# The Langevin movement model
+
+## Generic formulation 
+
+The Langevin movement model of @michelot2019langevin belongs to the wider class of continuous time potential-based movement models, mainly proposed by David Brillinger in a series of articles (see @brillinger2010handbook, chapter 26, and the references therein)
+
+The position process $\left\lbrace X_t \right\rbrace_{t \geq 0}$ (taking values in $\mathbb{R}^2$) is supposed to be the stochastic process solution to the following stochastic differential equation:
+$$
+\text{d} X_t = \frac{\gamma^2}{2}\nabla_x \log \pi_\theta(X_t) \text{d} t + \gamma \text{d} W_t 
+$$
+
+where:
+
+- $\pi_\theta(x): \mathbb{R}^2 \mapsto \mathbb{R}$ is a stricly positive function, depending on some unknown parameter $\theta$. This function can be interpretated as the *utilization distribution* (see below), or the eventual stationnary distribution of the individual's position.
+- $\gamma$ is an unknown *speed* parameter, reflecting the fact that individuals having different speeds can have a same utilization distribution.
+- $\nabla_x$ is the gradient operator.
+
+## About the function $\pi_\theta(x)$ and the process $\left\lbrace X_t \right\rbrace_{t \geq 0}$.
+
+The stochastic differential equation (SDE) defined above is known as the *Langevin diffusion* [@roberts1996exponential].
+
+As it is an SDE, its solution is a **continuous time Markov process with continuous paths in $\mathbb{R}^2$**. 
+Moreover, a remarkable property of the Langevin diffusion is that if $\pi_\theta(x)$ is a a probability density function, then its is the *stationnary distribution* of $\left\lbrace X_t \right\rbrace_{t \geq 0}$.
+This means that, when $t$ increases, for any area $\mathcal{A}$ of $\mathbb{R}^2$:
+$$\mathbb{P}(X_t \in \mathcal{A}) \underset{t \rightarrow \infty}{=} \int_{\mathcal{A}}\pi_\theta(z) \text{d}z\\$$
+
+In movement ecology, this translates to: $\pi_\theta(\cdot)$ is the **utilization distribution** [@worton1989kernel] of the considered individual.
+
+## Linking $\pi_{\theta}$ to spatial covariates: resource selection functions
+
+In ecology, a common obective is to link the utilization distribution to spatial covariates.
+Namely, suppose that you have a set of $J$ spatial covariates, modelled through smooth (thus, with derivatives) functions from $\mathbb{R}^2$ to $\mathbb{R}$, denoted $c_1(x),\dots, ,c_J(x)$. 
+A *resource selection function* is function $f_\theta(x)$ linking $\pi_\theta(x)$ to $c_1(x),\dots, c_J(x)$:
+
+$$\pi_\theta(x) = f_\theta(c_1(x),\dots, c_J(x)).$$
+
+A common parametric form of $f_\theta(x)$, having an easy interpretation is the following:
+$$\pi_\theta(x) = \frac{\exp{\sum_{j = 1}^J}\beta_jc_j(x)}{\int_{\mathbb{R}^2}\exp{\sum_{j = 1}^J}\beta_jc_j(z)\text{d}z} \propto \exp{\sum_{j = 1}^J}\beta_jc_j(x).$$
+In this context $\theta = \lbrace \beta_1,\dots, \beta_J \rbrace$, they are coefficients related to the importance of each covariates in the probability of presence of the individual. The denominator is  simply a constant term ensuring that $\pi_\theta$ integrates to 1, and thus is a p.d.f.
+
+**This is this specific resource selection function that is encoded in the `Rhabit` package**.
+
+# References
