@@ -44,6 +44,8 @@ library(tidyverse) # Set of useful packages, including ggplot2
 
 # The Langevin movement model
 
+In this section, we suppose that we have a set of observed (GPS) trajectories, and we want to link the observed movement with spatial covariates.
+
 ## Generic formulation 
 
 The Langevin movement model of @michelot2019langevin belongs to the wider class of continuous time potential-based movement models, mainly proposed by David Brillinger in a series of articles (see @brillinger2010handbook, chapter 26, and the references therein)
@@ -82,6 +84,149 @@ A common parametric form of $f_\theta(x)$, having an easy interpretation is the 
 $$\pi_\theta(x) = \frac{\exp{\sum_{j = 1}^J}\beta_jc_j(x)}{\int_{\mathbb{R}^2}\exp{\sum_{j = 1}^J}\beta_jc_j(z)\text{d}z} \propto \exp{\sum_{j = 1}^J}\beta_jc_j(x).$$
 In this context $\theta = \lbrace \beta_1,\dots, \beta_J \rbrace$, they are coefficients related to the importance of each covariates in the probability of presence of the individual. The denominator is  simply a constant term ensuring that $\pi_\theta$ integrates to 1, and thus is a p.d.f.
 
-**This is this specific resource selection function that is encoded in the `Rhabit` package**.
+**This is the specific resource selection function that is encoded in the `Rhabit` package**.
+
+## Formulation of the Langevin model with exponential RSF
+
+Finally, if we plug the above expression of $\pi_\theta(x)$ in the Langevin movement model, this results in the following movement model:
+
+$$
+\text{d} X_t = \frac{\gamma^2}{2}\left(\beta_1 \nabla_x \log c_1(X_t) + \dots +  \beta_J \nabla_x \log c_J(X_t) \right) \text{d} t + \gamma \text{d} W_t 
+$$
+
+This continuous time formulated model therefore links the displacement to environmental covariates, moreover, its formulation ensures, under mild condition, that the resulting stochastic process has a stationnary distribution (which can be interpreted as the utilization distribution).
+
+## Estimation of unknown parameters
+
+Unknown parameters in this model are $\theta$^and $\gamma$. 
+Using standard approximations for stochastic differential equations (see @michelot2019langevin for details), these quantities can be estimated by maximimizing an explicit function.
+In the case of the RSF shown above, this maximisation is equivalent to finding the estimates in a linear model, it is thus explicit and straightforward to compute.
+Moreover, (approximate) confidence intervals can be obtained as in the linear model.
+
+# Fitting the Langevin movement model with the `Rhabit` package
+
+## A simulated case
+
+We first focus on a simulation case, this will enables us to get familiar with the data format, `Rhabit` functions and outputs, and to see some model checking.
+
+### Trajectory data set {-}
+
+Let's first import the data set and print it's first lines:
+```{r trajectory_data, echo = -2}
+trajectory_data <- read.table(file = "tutorial_simulated_data.txt",
+                              sep = "\t", header = TRUE,
+                              colClasses = c(id = "factor")) # id column is a factor
+knitr::kable(head(trajectory_data))
+```
+
+
+This trajectory data set must be a data.frame having 3 mandatory columns:
+
+- `t`: The recording time of the position;
+- `x`: The $x$-component of the position;
+- `y`: The $y$-component of the position;
+
+In case of multiple individuals/trajectories per individual, an `id` column can be given.
+
+This data set consists in 20 different trajectories, that we will consider as independant realizations of a same movement model.
+
+```{r summary_trajectory_data, comment = NA}
+str(trajectory_data)
+```
+
+
+The resulting data set can be represented using usual `ggplot` code:
+
+```{r plotting_simulated_data}
+ggplot(trajectory_data) + # Data set which will be plotted
+  aes(x = x, y = y) + # Axis
+  geom_path(aes(color = id)) + # Plotting trajectories, One color per trajectory
+  # We add starting points
+  geom_point(data = dplyr::filter(trajectory_data, t == 0), col = "blue") + 
+  theme(legend.position = "none") + # No need for a legend
+  labs(x = "X-axis", y = "Y-axis", title = "Trajectory data set")
+```
+
+### Covariates
+
+Together with this trajectory data set, two environmental covariates were measured on the area:
+
+```{r environment_covariates}
+environment_covariates <- get(load("environment_covariates.RData"))
+```
+
+The `environment_covariates` object is a list (here, of length 2). 
+
+```{r properties_env_cov}
+is(environment_covariates) # A list
+(J <- length(environment_covariates)) # J is the number of covariates
+```
+
+Each element of the list is a "raster like" object.
+Basically, this means that each covariates consists in a grid (regular or not) on which covariates values are given. In `Rhabit` this means that each covariates is a list having three elements
+
+- `x`: a strictly increasing vector of values (the $x$ values of the grid), of size, say, $n_x$;
+- `y`: a strictly increasing vector of values (the $y$ values of the grid), of size, say, $n_y$;
+- `z`: A $n_x \times n_y$ matrix of covariates values.
+
+In our example, $n_x = n_y = 201$, and the grid is regularly spaced between -10 and 10.
+
+```{r str_environment_covariates}
+str(environment_covariates)
+```
+
+We can visualize the covariates (in `ggplot`, this requires to transform covariates in a data.frame):
+
+```{r plot_covariates, echo = FALSE}
+# Gathering all covariates in data.frame
+covariates_df <- map_dfr(environment_covariates, # To each element of the list, apply
+                         Rhabit::rasterToGGplot, # This function
+                         .id = "Covariate") %>% # Keep origin in a Covariate column
+  mutate(Covariate = factor(Covariate, labels = paste("Cov.", 1:J)))
+# First, for one covariate
+plot_covariate <- function(df, cov_name, plot_traj = FALSE) {
+  main_plot <-ggplot(data = df, aes(x = x, y = y)) +
+    geom_raster(aes(fill = val)) +
+    scale_fill_viridis_c(name = cov_name) +
+    scale_x_continuous(expand = c(0, 0)) +
+    scale_y_continuous(expand = c(0, 0)) +
+    labs(title = cov_name, x = "X-axis", y = "Y-axis") +
+    theme(legend.position = "bottom")
+  if(plot_traj){
+    return(main_plot +     
+             geom_path(data = trajectory_data, aes(group = id)))
+  }
+  else{
+    return(main_plot)
+  }
+}
+covariates_df %>% # Take the data.frame
+  group_by(Covariate) %>% # Group by Covariate
+  nest() %>% # Make a tibble, the second "column" gathers the data
+  mutate(plots = map2(data, Covariate, plot_covariate)) %>% 
+  gridExtra::grid.arrange(grobs = .$plots, nrow = 1)
+```
+
+Our question is whether of not the movement is driven by these covariates? If so, how much? 
+From this displacement, can we infer the utilization distribution of this individual?
+
+As a first idea, we can superpose the trajectory data to the previous plot:
+
+```{r plot_covariates_plus_traj, echo = FALSE}
+# Same plot, adding trajectory
+covariates_df %>% # Take the data.frame
+  group_by(Covariate) %>% # Group by Covariate
+  nest() %>% # Make a tibble, the second "column" gathers the data
+  mutate(plots = map2(data, Covariate, plot_covariate,
+                      plot_traj = TRUE)) %>% 
+  gridExtra::grid.arrange(grobs = .$plots, nrow = 1)
+```
+
+To answer these questions, we will use the Langevin movement model.
+
+## Computing covariates gradient at sampled locations
+
+As seen in Section 1, the model stipulated that the displacent depends on the gradient of the covariates, and not on the covariates themselves.
+Therefore, from our covariates, we must obtain
 
 # References
