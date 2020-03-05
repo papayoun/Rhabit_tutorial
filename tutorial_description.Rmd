@@ -12,6 +12,12 @@ output:
 bibliography: bibliography.bib
 ---
 
+```{r setup, include = FALSE}
+rm(list = ls())
+knitr::opts_chunk$set(echo = TRUE, comment = NA)
+```
+
+
 # About this tutorial {-}
 
 This tutorial explains how to fit the Langevin diffusion movement model published in @michelot2019langevin using the current version of the `R` package [@rcore2019language] `Rhabit`.
@@ -115,7 +121,7 @@ Let's first import the data set and print it's first lines:
 ```{r trajectory_data, echo = -2}
 trajectory_data <- read.table(file = "tutorial_simulated_data.txt",
                               sep = "\t", header = TRUE,
-                              colClasses = c(id = "factor")) # id column is a factor
+                              colClasses = c(ID = "factor")) # ID column is a factor
 knitr::kable(head(trajectory_data))
 ```
 
@@ -140,7 +146,7 @@ The resulting data set can be represented using usual `ggplot` code:
 ```{r plotting_simulated_data}
 ggplot(trajectory_data) + # Data set which will be plotted
   aes(x = x, y = y) + # Axis
-  geom_path(aes(color = id)) + # Plotting trajectories, One color per trajectory
+  geom_path(aes(color = ID)) + # Plotting trajectories, One color per trajectory
   # We add starting points
   geom_point(data = dplyr::filter(trajectory_data, t == 0), col = "blue") + 
   theme(legend.position = "none") + # No need for a legend
@@ -194,7 +200,7 @@ plot_covariate <- function(df, cov_name, plot_traj = FALSE) {
     theme(legend.position = "bottom")
   if(plot_traj){
     return(main_plot +     
-             geom_path(data = trajectory_data, aes(group = id)))
+             geom_path(data = trajectory_data, aes(group = ID)))
   }
   else{
     return(main_plot)
@@ -227,6 +233,136 @@ To answer these questions, we will use the Langevin movement model.
 ## Computing covariates gradient at sampled locations
 
 As seen in Section 1, the model stipulated that the displacent depends on the gradient of the covariates, and not on the covariates themselves.
-Therefore, from our covariates, we must obtain
+Therefore, from our covariates, we must obtain a value of their gradients at each sampled location.
+
+This can be done by any of your favorite method. 
+As a possible solution, the `Rhabit` package proposes the function `bilinearGradArray`.
+This functions takes the matrix of sampled locations (of size $n \times 2$) and the covariates rasters and returns a $n \times 2 \times J$ array giving all the needed gradient vectors.
+The method used is basic bilinear interpolation on a grid (see @michelot2019langevin).
+
+```{r gradient_array}
+locations <- trajectory_data %>% # From trajectory_data, extract 
+  dplyr::select(x, y) %>% # the  sampled locations  (the x and y columns)
+  as.matrix() # and convert it to a matrix 
+gradient_array <- Rhabit::bilinearGradArray(locs = locations,
+                                            cov_list = environment_covariates)
+```
+
+## Fitting the model
+
+Now, we have all the ingredients to fit the Langevin movement model to the data.
+This is done with the function `langevinUD`.
+The fitting is done using the explicit least squares estimator of the linear model. Thus, for reasonnable amount of data, this should be really quick.
+
+```{r langevin_fitting}
+langevin_fit <- Rhabit::langevinUD(locs = locations, # Matrix of locations 
+                                   times = trajectory_data$t, # Vector of times
+                                   ID = as.character(trajectory_data$ID), # Vector of IDs
+                                   grad_array = gradient_array) # Gradient at locations
+```
+
+The results are structured into a list having different elements:
+
+```{r langevin_fit_elements}
+str(langevin_fit)
+```
+
+## Inspecting estimates
+
+### Estimates and confidence intervals {-}
+
+The first interest that we have is in the values of the $\beta$ coefficients.
+The values are obtained in the `betaHat` elements.
+
+```{r betaHat_first_model}
+langevin_fit$betaHat
+```
+
+One can see that the firt two coefficients have higher values than the third one. 
+As usual, having confidence intervals would allow us to decide whether these values are non zero. 
+Asymptotic approximate 95% (the confidence region can be set differently in the `langevinUD` function) confidence intervals are given in the `CI` element.
+
+```{r CI_first_model}
+langevin_fit$CI
+```
+
+One can therefore see that none of the 95% confidence intervals covers the 0 value.
+
+### AIC criterion
+
+The inference procedure rely on a pseudo log-likelihood (obtained through the Euler discretization). Therefore, a pseudo AIC can be computed to compare different models. 
+
+```{r AIC_first_model}
+langevin_fit$AIC
+```
+
+## Inspecting residuals
+
+As the model boils down to a linear model (under our approximation assumption).
+We can inspect the predicted values and the residuals.
+
+Note that the residuals are the residuals of the normalized increments (the $\mathbf{Y}$ vector in @michelot2019langevin), whereas, the predicted are the predicted positions given the last observations and the model estimates. 
+Both these elements are `tibble` having the same number of rows than the original data.
+
+```{r residuals}
+langevin_fit$residuals
+```
+
+```{r predicted}
+# Note that the first value of each trajectory cannot be predicted
+langevin_fit$predicted
+```
+
+One can therefore see whether the expected displacement matches the actual one.
+
+On the following graph, we show the first 30 points of the first trajectory (the purple dot marks the first position).
+
+```{r plot_predicted}
+langevin_fit$predicted %>% 
+  rename(x_pred = x, y_pred = y) %>%
+  select(x_pred, y_pred) %>% 
+  bind_cols(trajectory_data) %>% 
+  filter(ID == "1") %>% 
+  slice(1:30) %>% 
+  ggplot(aes(x = x, y = y)) + 
+  geom_point() +
+  geom_point(data = slice(trajectory_data, 1), # Mark the first point
+             col = "purple", size = 5)+ 
+  geom_path(aes(group = ID), color = "blue", linetype = 2) + # Plot the path
+  geom_segment(aes(xend = lead(x_pred), # Plot the expected displacement
+                   yend = lead(y_pred)), # With arrows
+               color = "red", 
+               arrow = arrow(length = unit(0.01, "npc")))
+```
+
+One can see that the expected displacement is way underestimated.
+
+## Estimated utilization distribution
+
+Using the `plotUD` function, we can visualize the estimated UD.
+
+```{r plot_ud}
+Rhabit::plotUD(environment_covariates, langevin_fit$betaHat) +
+  # geom_path(data = trajectory_data, aes(group = ID)) + # If you want to add trajectories
+  labs(x = "X-axis", y = "Y-axis",
+       title = "Estimated UD")
+```
+
+# Exercise
+
+Add to the current list of covariates the `distance_covariate` that can be loaded:
+```{r}
+distance_covariate <- get(load("distance_covariate.RData"))
+all_covariates <- c(environment_covariates,
+                    distance_covariate)
+```
+
+This covariate simply computes the squared distance to the center of the map (the point $(0, 0)$).
+
+Following the previous codes, fit the Langevin Movement model using this new set of covariates.
+
+Check again the estimates of the $\beta$ coefficients.
+Using the AIC, choose the best model.
+Check again the predicted displacement to see whether predictions are improved.
 
 # References

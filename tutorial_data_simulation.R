@@ -22,18 +22,21 @@ mean_function <- function(z){# mean function
 J <- 3 # number of covariates
 
  
-covariates <- c(replicate(J, # Number of environmental covariates 
+my_covariates <- c(replicate(J, # Number of environmental covariates 
                           Rhabit::simSpatialCov(lim, nu, rho, sigma2, resol = resol,
                                                 mean_function = mean_function,
                                                 raster_like = T),
                           simplify = F),
                 list(get_distance_square(lim, resol)))
-environment_covariates <- covariates[1:J]
+environment_covariates <- my_covariates[1:J]
+distance_covariate <- my_covariates[J + 1]
 save(environment_covariates, 
      file = "environment_covariates.RData")
+save(distance_covariate, 
+     file = "distance_covariate.RData")
 
 beta_true <- c(5, 10, 0, -1.5)
-plot_ud <- Rhabit::getUD(covariates, beta_true, log = F) %>% 
+plot_ud <- Rhabit::getUD(my_covariates, beta_true, log = F) %>% 
   Rhabit::rasterToGGplot() %>% 
   ggplot(aes(x = x, y = y)) +
   geom_raster(aes(fill = val)) +
@@ -50,8 +53,8 @@ set.seed(123) #repeatability
 tracks <- purrr::rerun(20,
                        Rhabit::simLangevinMM(beta = beta_true, gamma2 = 5,
                         times = times, loc0 = runif(2, -9, 9),
-                        cov_list = covariates, keep_grad = F)) %>% 
-  bind_rows(.id = "id")
+                        cov_list = my_covariates, keep_grad = F)) %>% 
+  bind_rows(.id = "ID")
 write.table(tracks, file = "tutorial_simulated_data.txt",
             row.names = FALSE, sep = "\t")
 
@@ -65,7 +68,7 @@ locs <- tracks %>%
   as.matrix()
 times <- pull(tracks, t)
 ID <- pull(tracks, id)
-grad_array <- Rhabit::bilinearGradArray(locs, covariates)
+grad_array <- Rhabit::bilinearGradArray(locs, my_covariates)
 langevin_result <- Rhabit::langevinUD(locs = locs, times = times, ID = ID, 
                                       leverage = F,
                                       grad_array = grad_array[,,1:2, drop = F])
